@@ -1,0 +1,75 @@
+##Create Resource Group
+
+$rgName = "RG002"
+$location = "central india"
+New-AzureRmResourceGroup -Name $rgName -Location $location
+
+##Networking
+
+$subnets = @()
+$subnet1Name = "Subnet-1"
+$subnet2Name = "Subnet-2"
+$subnet1AddressPrefix = "10.0.0.0/24"
+$subnet2AddressPrefix = "10.0.1.0/24"
+$vnetAddresssSpace = "10.0.0.0/16"
+$VNETName = "ExamRefVNET-PS"
+$subnets += New-AzureRmVirtualNetworkSubnetConfig -Name $subnet1Name -AddressPrefix $subnet1AddressPrefix 
+$subnets += New-AzureRmVirtualNetworkSubnetConfig -Name $subnet2Name -AddressPrefix $subnet2AddressPrefix
+$vnet = New-AzureRmVirtualNetwork -Name $VNETName -ResourceGroupName $rgName -Location $location -AddressPrefix $vnetAddresssSpace -Subnet $subnets
+
+##Create Storage Account 
+
+$saName = "examrefstoragew001"
+$storageAcc = New-AzureRmStorageAccount -ResourceGroupName $rgName -Name $saName -Location $location -SkuName Standard_LRS
+$blobEndpoint = $storageAcc.PrimaryEndpoints.Blob.ToString()
+
+##Create Availability Set
+
+$avName = "av001"
+$avSet = New-AzureRmAvailabilitySet -ResourceGroupName $rgName -Name $avName -Location $location
+
+
+##To connect to the virtual machine remotely create a public IP address resource.
+
+$ipName = "PublicIP001"
+$pip = New-AzureRmPublicIpAddress -Name $ipName -ResourceGroupName $rgName -Location $location -AllocationMethod Dynamic -DomainNameLabel $dnsName  
+
+##Add a rule to the network security group to allow RDP in
+
+$nsgRules = @()
+$nsgRules += New-AzureRmNetworkSecurityRuleConfig -Name "RDP" -Description "RemoteDesktop" -Protocol Tcp -SourcePortRange "*" -DestinationPortRange "3389" -SourceAddressPrefix "*" -DestinationAddressPrefix "*" -Access Allow -Priority 110 -Direction Inbound 
+
+$nsgName = "ExamRefNSG" 
+$nsg = New-AzureRmNetworkSecurityGroup -ResourceGroupName $rgName -Name $nsgName -SecurityRules $nsgRules -Location $location
+
+##create the network interface for the VM
+
+$nicName = "ExamRefVM-NIC"
+$nic = New-AzureRmNetworkInterface -Name $nicName -ResourceGroupName $rgName -Location $location -SubnetId $vnet.Subnets[0].Id -PublicIpAddressId $pip.Id -NetworkSecurityGroupId $nsg.ID
+
+##instantiate a local configuration object that represents a virtual machine to associate them together.
+
+$vmSize = "Standard_DS1_V2" 
+$vmName = "VM001"
+$vm = New-AzureRmVMConfig -VMName $vmName -VMSize $vmSize -AvailabilitySetId $avSet.Id
+$vm = Add-AzureRmVMNetworkInterface -VM $vm -Id $nic.id
+
+##Setting up credentials
+
+$cred = Get-Credential 
+Set-AzureRmVMOperatingSystem -Windows -ComputerName $vmName -Credential $cred -ProvisionVMAgent -VM $vm 
+
+##The operating system image (or existing VHD) must be specified 
+
+$pubName    = "MicrosoftWindowsServer"
+$offerName  = "WindowsServer"
+$skuName    = "2012-Datacenter"
+Set-AzureRmVMSourceImage -PublisherName $pubName -Offer $offerName -Skus $skuName -Version "latest" -VM $vm 
+
+$osDiskName = "ExamRefVM-osdisk"
+$osDiskUri    = $blobEndpoint + "vhds/" + $osDiskName  + ".vhd"
+Set-AzureRmVMOSDisk -Name $osDiskName -VhdUri $osDiskUri -CreateOption fromImage -VM $vm
+
+##The final step is to provision the virtual machine by calling the New-AzureRmVMConfig cmdlet
+
+New-AzureRmVM -ResourceGroupName $rgName -Location $location -VM $vm
